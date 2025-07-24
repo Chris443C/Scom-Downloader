@@ -1,0 +1,308 @@
+// SCORM downloader that only downloads REAL media files (skips data: URLs)
+async function downloadRealMediaOnly() {
+    console.log('🎯 Starting download of REAL media files only...');
+    
+    const pageTitle = document.title.replace(/[^a-zA-Z0-9]/g, '_');
+    const timestamp = new Date().toISOString().slice(0, 16).replace(/[:-]/g, '');
+    const prefix = `${pageTitle}_${timestamp}`;
+    
+    console.log(`📁 Files will be prefixed with: ${prefix}`);
+    
+    // Helper function for downloads
+    function forceDownload(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }, 100);
+    }
+    
+    // Function to check if a URL is real content (not a data: URL dummy)
+    function isRealMediaUrl(url) {
+        if (!url) return false;
+        if (url.startsWith('data:')) return false;
+        if (url.includes('base64')) return false;
+        return url.startsWith('http') || url.startsWith('blob:') || url.startsWith('/');
+    }
+    
+    // 1. Download HTML page
+    console.log('📄 Downloading HTML page...');
+    const htmlBlob = new Blob([document.documentElement.outerHTML], { type: 'text/html;charset=utf-8' });
+    forceDownload(htmlBlob, `${prefix}__page.html`);
+    
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    // 2. Get all media elements and filter for REAL sources only
+    const audioElements = [...document.querySelectorAll('audio')];
+    const videoElements = [...document.querySelectorAll('video')];
+    const imageElements = [...document.querySelectorAll('img')];
+    
+    // Filter audio sources - only real URLs
+    const realAudioSources = [];
+    audioElements.forEach((audio, index) => {
+        const src = audio.src || audio.currentSrc;
+        if (isRealMediaUrl(src)) {
+            realAudioSources.push({
+                src: src,
+                id: audio.id || `audio_${index + 1}`,
+                element: audio
+            });
+            console.log(`✅ Real audio found: ${src}`);
+        } else {
+            console.log(`⚠️ Skipping dummy audio: ${src ? src.substring(0, 50) + '...' : 'no src'}`);
+        }
+    });
+    
+    // Filter video sources - only real URLs
+    const realVideoSources = [];
+    videoElements.forEach((video, index) => {
+        const src = video.src || video.currentSrc;
+        if (isRealMediaUrl(src)) {
+            realVideoSources.push({
+                src: src,
+                id: video.id || `video_${index + 1}`,
+                element: video
+            });
+            console.log(`✅ Real video found: ${src}`);
+        } else {
+            console.log(`⚠️ Skipping dummy video: ${src ? src.substring(0, 50) + '...' : 'no src'}`);
+        }
+    });
+    
+    // Filter image sources - only real URLs
+    const realImageSources = [];
+    imageElements.forEach((img, index) => {
+        const src = img.src;
+        if (isRealMediaUrl(src) && !src.includes('data:image')) {
+            realImageSources.push({
+                src: src,
+                alt: img.alt || `image_${index + 1}`
+            });
+            console.log(`✅ Real image found: ${src}`);
+        } else {
+            console.log(`⚠️ Skipping dummy/data image: ${src ? src.substring(0, 50) + '...' : 'no src'}`);
+        }
+    });
+    
+    console.log(`🎯 Summary of REAL media found:`);
+    console.log(`   🎵 Audio files: ${realAudioSources.length}`);
+    console.log(`   🎬 Video files: ${realVideoSources.length}`);
+    console.log(`   🖼️ Images: ${realImageSources.length}`);
+    
+    if (realAudioSources.length === 0 && realVideoSources.length === 0 && realImageSources.length === 0) {
+        console.log('❌ No real media files found to download!');
+        console.log('🔍 All media appears to be placeholder/dummy content.');
+        return;
+    }
+    
+    let successCount = 0;
+    let totalAttempts = 0;
+    
+    // 3. Download real audio files
+    for (let i = 0; i < realAudioSources.length; i++) {
+        const audioData = realAudioSources[i];
+        totalAttempts++;
+        
+        try {
+            console.log(`🎵 Downloading audio ${i + 1}/${realAudioSources.length}: ${audioData.src}`);
+            
+            const response = await fetch(audioData.src, {
+                method: 'GET',
+                mode: 'cors',
+                credentials: 'include'
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            
+            const blob = await response.blob();
+            
+            if (blob.size === 0) {
+                throw new Error('Empty file received');
+            }
+            
+            // Create meaningful filename from the URL
+            const urlPath = new URL(audioData.src, window.location.href).pathname;
+            const originalName = urlPath.split('/').pop();
+            const cleanName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
+            const filename = `${prefix}__audio_${String(i + 1).padStart(2, '0')}_${cleanName}`;
+            
+            forceDownload(blob, filename);
+            console.log(`✅ Downloaded: ${filename} (${blob.size} bytes)`);
+            successCount++;
+            
+        } catch (error) {
+            console.error(`❌ Failed to download audio ${i + 1}:`, error);
+        }
+        
+        // Wait between downloads
+        await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    
+    // 4. Download real video files
+    for (let i = 0; i < realVideoSources.length; i++) {
+        const videoData = realVideoSources[i];
+        totalAttempts++;
+        
+        try {
+            console.log(`🎬 Downloading video ${i + 1}/${realVideoSources.length}: ${videoData.src}`);
+            
+            const response = await fetch(videoData.src, {
+                method: 'GET',
+                mode: 'cors',
+                credentials: 'include'
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            
+            const blob = await response.blob();
+            
+            if (blob.size === 0) {
+                throw new Error('Empty file received');
+            }
+            
+            const urlPath = new URL(videoData.src, window.location.href).pathname;
+            const originalName = urlPath.split('/').pop();
+            const cleanName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
+            const filename = `${prefix}__video_${String(i + 1).padStart(2, '0')}_${cleanName}`;
+            
+            forceDownload(blob, filename);
+            console.log(`✅ Downloaded: ${filename} (${blob.size} bytes)`);
+            successCount++;
+            
+        } catch (error) {
+            console.error(`❌ Failed to download video ${i + 1}:`, error);
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    
+    // 5. Download real images
+    for (let i = 0; i < realImageSources.length; i++) {
+        const imageData = realImageSources[i];
+        totalAttempts++;
+        
+        try {
+            console.log(`🖼️ Downloading image ${i + 1}/${realImageSources.length}: ${imageData.src}`);
+            
+            const response = await fetch(imageData.src);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            
+            const blob = await response.blob();
+            if (blob.size === 0) throw new Error('Empty file received');
+            
+            const urlPath = new URL(imageData.src, window.location.href).pathname;
+            const originalName = urlPath.split('/').pop();
+            const cleanName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
+            const filename = `${prefix}__image_${String(i + 1).padStart(2, '0')}_${cleanName}`;
+            
+            forceDownload(blob, filename);
+            console.log(`✅ Downloaded: ${filename} (${blob.size} bytes)`);
+            successCount++;
+            
+        } catch (error) {
+            console.error(`❌ Failed to download image ${i + 1}:`, error);
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    
+    // 6. Create summary with only real files
+    const summary = {
+        downloadDate: new Date().toISOString(),
+        pageTitle: document.title,
+        pageUrl: window.location.href,
+        prefix: prefix,
+        realMediaFound: totalAttempts,
+        successfulDownloads: successCount,
+        failedDownloads: totalAttempts - successCount,
+        realAudioFiles: realAudioSources.map(a => a.src),
+        realVideoFiles: realVideoSources.map(v => v.src),
+        realImageFiles: realImageSources.map(i => i.src),
+        skippedDummyFiles: {
+            audioDummyCount: audioElements.length - realAudioSources.length,
+            videoDummyCount: videoElements.length - realVideoSources.length,
+            imageDummyCount: imageElements.length - realImageSources.length
+        },
+        note: "This summary only includes real media files. Dummy/placeholder content was automatically skipped."
+    };
+    
+    const summaryBlob = new Blob([JSON.stringify(summary, null, 2)], { type: 'application/json' });
+    forceDownload(summaryBlob, `${prefix}__REAL_MEDIA_SUMMARY.json`);
+    
+    console.log('🎉 Real media download completed!');
+    console.log(`✅ Successfully downloaded: ${successCount}/${totalAttempts} real files`);
+    console.log(`⚠️ Skipped ${(audioElements.length + videoElements.length + imageElements.length) - totalAttempts} dummy/placeholder files`);
+    console.log(`📋 Summary saved as: ${prefix}__REAL_MEDIA_SUMMARY.json`);
+}
+
+// Function to analyze what media is real vs dummy
+function analyzeMediaSources() {
+    console.log('🔍 Analyzing media sources (real vs dummy)...');
+    
+    const audioElements = [...document.querySelectorAll('audio')];
+    const videoElements = [...document.querySelectorAll('video')];
+    const imageElements = [...document.querySelectorAll('img')];
+    
+    console.log('\n🎵 AUDIO ANALYSIS:');
+    audioElements.forEach((audio, index) => {
+        const src = audio.src || audio.currentSrc;
+        const isReal = src && !src.startsWith('data:') && !src.includes('base64');
+        console.log(`Audio ${index + 1}: ${isReal ? '✅ REAL' : '❌ DUMMY'} - ${src ? src.substring(0, 80) + (src.length > 80 ? '...' : '') : 'no src'}`);
+    });
+    
+    console.log('\n🎬 VIDEO ANALYSIS:');
+    videoElements.forEach((video, index) => {
+        const src = video.src || video.currentSrc;
+        const isReal = src && !src.startsWith('data:') && !src.includes('base64');
+        console.log(`Video ${index + 1}: ${isReal ? '✅ REAL' : '❌ DUMMY'} - ${src ? src.substring(0, 80) + (src.length > 80 ? '...' : '') : 'no src'}`);
+    });
+    
+    console.log('\n🖼️ IMAGE ANALYSIS:');
+    imageElements.slice(0, 10).forEach((img, index) => { // Only show first 10 images
+        const src = img.src;
+        const isReal = src && !src.startsWith('data:') && !src.includes('base64');
+        console.log(`Image ${index + 1}: ${isReal ? '✅ REAL' : '❌ DUMMY'} - ${src ? src.substring(0, 80) + (src.length > 80 ? '...' : '') : 'no src'}`);
+    });
+    
+    if (imageElements.length > 10) {
+        console.log(`... and ${imageElements.length - 10} more images`);
+    }
+    
+    const realAudioCount = audioElements.filter(a => {
+        const src = a.src || a.currentSrc;
+        return src && !src.startsWith('data:') && !src.includes('base64');
+    }).length;
+    
+    const realVideoCount = videoElements.filter(v => {
+        const src = v.src || v.currentSrc;  
+        return src && !src.startsWith('data:') && !src.includes('base64');
+    }).length;
+    
+    const realImageCount = imageElements.filter(i => {
+        const src = i.src;
+        return src && !src.startsWith('data:') && !src.includes('base64');
+    }).length;
+    
+    console.log('\n📊 SUMMARY:');
+    console.log(`Real Audio Files: ${realAudioCount}/${audioElements.length}`);
+    console.log(`Real Video Files: ${realVideoCount}/${videoElements.length}`);
+    console.log(`Real Image Files: ${realImageCount}/${imageElements.length}`);
+    console.log(`Total Real Files: ${realAudioCount + realVideoCount + realImageCount}`);
+}
+
+console.log('🎯 Real Media Only Downloader loaded!');
+console.log('Available functions:');
+console.log('- analyzeMediaSources() - Analyze what media is real vs dummy');
+console.log('- downloadRealMediaOnly() - Download only real media files');
+console.log('');
+console.log('💡 Run analyzeMediaSources() first to see what will be downloaded!');
