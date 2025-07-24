@@ -1,0 +1,394 @@
+// Auto Navigation Audio Downloader - Downloads audio when you click Next
+class SCORMAutoDownloader {
+    constructor() {
+        this.downloadedUrls = new Set();
+        this.pageCounter = 1;
+        this.isActive = false;
+        this.prefix = `${document.title.replace(/[^a-zA-Z0-9]/g, '_')}_${new Date().toISOString().slice(0, 16).replace(/[:-]/g, '')}`;
+        this.observers = [];
+        this.totalDownloaded = 0;
+        
+        console.log(`📁 Session prefix: ${this.prefix}`);
+    }
+    
+    // Start auto-downloading
+    start() {
+        console.log('🚀 Starting auto navigation downloader...');
+        console.log('Navigate through your SCORM course normally - audio will be downloaded automatically!');
+        
+        this.isActive = true;
+        
+        // Download audio from current page first
+        this.downloadCurrentPageAudio();
+        
+        // Monitor for navigation events
+        this.monitorNavigation();
+        
+        // Monitor for DOM changes (in case content loads dynamically)
+        this.monitorContentChanges();
+        
+        console.log('✅ Auto downloader is active! Navigate through your course normally.');
+    }
+    
+    // Stop auto-downloading
+    stop() {
+        console.log('⏹️ Stopping auto navigation downloader...');
+        this.isActive = false;
+        
+        // Disconnect all observers
+        this.observers.forEach(observer => observer.disconnect());
+        this.observers = [];
+        
+        // Download summary
+        this.downloadSummary();
+        
+        console.log(`🎉 Auto downloader stopped. Total files downloaded: ${this.totalDownloaded}`);
+    }
+    
+    // Monitor for navigation clicks and page changes
+    monitorNavigation() {
+        // Method 1: Monitor clicks on common navigation elements
+        const navigationSelectors = [
+            'button[class*="next"]',
+            'button[class*="Next"]',
+            'a[class*="next"]',
+            'a[class*="Next"]',
+            '[class*="nav"][class*="next"]',
+            '[class*="btn"][class*="next"]',
+            'button[title*="next"]',
+            'button[title*="Next"]',
+            'input[value*="next"]',
+            'input[value*="Next"]',
+            '.storyline-next',
+            '.sl-next',
+            '#next',
+            '[data-action*="next"]'
+        ];
+        
+        // Add click listeners to existing navigation elements
+        navigationSelectors.forEach(selector => {
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(element => {
+                element.addEventListener('click', () => {
+                    if (this.isActive) {
+                        console.log('🔄 Navigation click detected, waiting for new content...');
+                        // Wait for new content to load, then download
+                        setTimeout(() => {
+                            this.downloadCurrentPageAudio();
+                        }, 2000); // Wait 2 seconds for content to load
+                    }
+                });
+            });
+        });
+        
+        // Method 2: Monitor for new navigation elements being added
+        const navObserver = new MutationObserver((mutations) => {
+            if (!this.isActive) return;
+            
+            mutations.forEach((mutation) => {
+                mutation.addedNodes.forEach((node) => {
+                    if (node.nodeType === Node.ELEMENT_NODE) {
+                        // Check if new navigation elements were added
+                        navigationSelectors.forEach(selector => {
+                            const newNavElements = node.querySelectorAll ? node.querySelectorAll(selector) : [];
+                            newNavElements.forEach(element => {
+                                element.addEventListener('click', () => {
+                                    if (this.isActive) {
+                                        console.log('🔄 New navigation click detected...');
+                                        setTimeout(() => {
+                                            this.downloadCurrentPageAudio();
+                                        }, 2000);
+                                    }
+                                });
+                            });
+                        });
+                    }
+                });
+            });
+        });
+        
+        navObserver.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+        
+        this.observers.push(navObserver);
+        
+        // Method 3: Monitor URL changes (for hash-based navigation)
+        let lastUrl = window.location.href;
+        const urlChecker = setInterval(() => {
+            if (!this.isActive) {
+                clearInterval(urlChecker);
+                return;
+            }
+            
+            if (window.location.href !== lastUrl) {
+                console.log('🔄 URL change detected, downloading new page audio...');
+                lastUrl = window.location.href;
+                setTimeout(() => {
+                    this.downloadCurrentPageAudio();
+                }, 1500);
+            }
+        }, 1000);
+        
+        // Method 4: Monitor for history changes
+        const originalPushState = history.pushState;
+        const originalReplaceState = history.replaceState;
+        
+        history.pushState = function(...args) {
+            originalPushState.apply(history, args);
+            if (this.isActive) {
+                console.log('🔄 History push detected...');
+                setTimeout(() => {
+                    this.downloadCurrentPageAudio();
+                }, 1500);
+            }
+        }.bind(this);
+        
+        history.replaceState = function(...args) {
+            originalReplaceState.apply(history, args);
+            if (this.isActive) {
+                console.log('🔄 History replace detected...');
+                setTimeout(() => {
+                    this.downloadCurrentPageAudio();
+                }, 1500);
+            }
+        }.bind(this);
+    }
+    
+    // Monitor for content changes (when audio elements get new sources)
+    monitorContentChanges() {
+        const contentObserver = new MutationObserver((mutations) => {
+            if (!this.isActive) return;
+            
+            let shouldCheckAudio = false;
+            
+            mutations.forEach((mutation) => {
+                // Check for attribute changes on audio elements
+                if (mutation.type === 'attributes' && 
+                    mutation.target.tagName === 'AUDIO' && 
+                    mutation.attributeName === 'src') {
+                    shouldCheckAudio = true;
+                }
+                
+                // Check for new audio elements being added
+                mutation.addedNodes.forEach((node) => {
+                    if (node.nodeType === Node.ELEMENT_NODE) {
+                        if (node.tagName === 'AUDIO' || 
+                            (node.querySelectorAll && node.querySelectorAll('audio').length > 0)) {
+                            shouldCheckAudio = true;
+                        }
+                    }
+                });
+            });
+            
+            if (shouldCheckAudio) {
+                console.log('🔄 Audio content changed, checking for new files...');
+                setTimeout(() => {
+                    this.downloadCurrentPageAudio();
+                }, 1000);
+            }
+        });
+        
+        contentObserver.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['src']
+        });
+        
+        this.observers.push(contentObserver);
+    }
+    
+    // Download audio from current page
+    async downloadCurrentPageAudio() {
+        if (!this.isActive) return;
+        
+        console.log(`\n🎵 Checking page ${this.pageCounter} for audio files...`);
+        
+        const audioElements = document.querySelectorAll('audio');
+        const realUrls = [];
+        
+        // Find real audio URLs
+        audioElements.forEach((audio, index) => {
+            const src = audio.src;
+            if (src && !src.startsWith('data:') && !this.downloadedUrls.has(src)) {
+                realUrls.push({
+                    url: src,
+                    element: audio,
+                    index: index + 1
+                });
+            }
+        });
+        
+        if (realUrls.length === 0) {
+            console.log(`⚠️ Page ${this.pageCounter}: No new real audio files found`);
+            this.pageCounter++;
+            return;
+        }
+        
+        console.log(`✅ Page ${this.pageCounter}: Found ${realUrls.length} new audio files to download`);
+        
+        // Download each file
+        for (let i = 0; i < realUrls.length; i++) {
+            const audioData = realUrls[i];
+            
+            try {
+                // Mark as downloaded to prevent duplicates
+                this.downloadedUrls.add(audioData.url);
+                
+                console.log(`⬇️ Downloading ${i + 1}/${realUrls.length}: ${audioData.url.split('/').pop()}`);
+                
+                // Convert to absolute URL if needed
+                const absoluteUrl = audioData.url.startsWith('http') ? 
+                    audioData.url : 
+                    new URL(audioData.url, window.location.href).href;
+                
+                const response = await fetch(absoluteUrl, {
+                    method: 'GET',
+                    mode: 'cors',
+                    credentials: 'include'
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                const blob = await response.blob();
+                
+                if (blob.size === 0) {
+                    throw new Error('Empty file');
+                }
+                
+                // Create filename with page number
+                const originalName = audioData.url.split('/').pop();
+                const cleanName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
+                const filename = `${this.prefix}__page${String(this.pageCounter).padStart(2, '0')}_${cleanName}`;
+                
+                this.downloadBlob(blob, filename);
+                this.totalDownloaded++;
+                
+                console.log(`✅ Downloaded: ${filename} (${(blob.size / 1024).toFixed(1)} KB)`);
+                
+            } catch (error) {
+                console.error(`❌ Failed to download ${audioData.url}:`, error);
+            }
+            
+            // Small delay between downloads
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        
+        this.pageCounter++;
+        console.log(`📊 Page ${this.pageCounter - 1} complete. Total downloaded so far: ${this.totalDownloaded}`);
+    }
+    
+    // Download a blob
+    downloadBlob(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }, 100);
+    }
+    
+    // Download summary
+    downloadSummary() {
+        const summary = {
+            sessionDate: new Date().toISOString(),
+            pageTitle: document.title,
+            startUrl: window.location.href,
+            prefix: this.prefix,
+            pagesProcessed: this.pageCounter - 1,
+            totalFilesDownloaded: this.totalDownloaded,
+            downloadedUrls: Array.from(this.downloadedUrls),
+            note: "Files are named with page numbers showing when they were discovered during navigation."
+        };
+        
+        const summaryBlob = new Blob([JSON.stringify(summary, null, 2)], { type: 'application/json' });
+        this.downloadBlob(summaryBlob, `${this.prefix}__AUTO_DOWNLOAD_SUMMARY.json`);
+        
+        console.log('📋 Download summary saved');
+    }
+    
+    // Get current status
+    getStatus() {
+        return {
+            isActive: this.isActive,
+            currentPage: this.pageCounter,
+            totalDownloaded: this.totalDownloaded,
+            downloadedUrls: Array.from(this.downloadedUrls)
+        };
+    }
+}
+
+// Global instance
+let autoDownloader = null;
+
+// Easy-to-use functions
+function startAutoDownload() {
+    if (autoDownloader && autoDownloader.isActive) {
+        console.log('⚠️ Auto downloader is already running. Stop it first with stopAutoDownload()');
+        return;
+    }
+    
+    autoDownloader = new SCORMAutoDownloader();
+    autoDownloader.start();
+    
+    console.log('🎧 Auto downloader started!');
+    console.log('💡 Now navigate through your SCORM course normally.');
+    console.log('💡 Audio files will be downloaded automatically from each page.');
+    console.log('💡 Use stopAutoDownload() when finished.');
+}
+
+function stopAutoDownload() {
+    if (autoDownloader && autoDownloader.isActive) {
+        autoDownloader.stop();
+        console.log('✅ Auto downloader stopped.');
+    } else {
+        console.log('❌ No active auto downloader to stop.');
+    }
+}
+
+function getDownloadStatus() {
+    if (autoDownloader) {
+        const status = autoDownloader.getStatus();
+        console.log('📊 Download Status:', status);
+        return status;
+    } else {
+        console.log('❌ No auto downloader instance.');
+        return null;
+    }
+}
+
+// Function to manually download current page (for testing)
+async function downloadCurrentPage() {
+    console.log('🧪 Testing current page download...');
+    
+    const tempDownloader = new SCORMAutoDownloader();
+    await tempDownloader.downloadCurrentPageAudio();
+    
+    console.log('✅ Current page test complete');
+}
+
+console.log('🤖 Auto Navigation Audio Downloader loaded!');
+console.log('');
+console.log('🚀 Available functions:');
+console.log('- startAutoDownload() - Begin auto-downloading (do this first!)');
+console.log('- stopAutoDownload() - Stop auto-downloading and save summary');
+console.log('- getDownloadStatus() - Check current progress');
+console.log('- downloadCurrentPage() - Test download on current page');
+console.log('');
+console.log('💡 INSTRUCTIONS:');
+console.log('1. Run startAutoDownload()');
+console.log('2. Navigate through your SCORM course normally (click Next, etc.)');
+console.log('3. Audio files will download automatically from each page');
+console.log('4. Run stopAutoDownload() when finished');
+console.log('');
+console.log('🎯 This monitors for Next clicks, URL changes, and content updates!');
+console.log('📁 Files will be named with page numbers showing discovery order');
