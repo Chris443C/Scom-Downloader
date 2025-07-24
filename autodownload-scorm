@@ -164,18 +164,18 @@ class SCORMAutoDownloader {
             let shouldCheckAudio = false;
             
             mutations.forEach((mutation) => {
-                // Check for attribute changes on audio elements
+                // Check for attribute changes on audio/video elements
                 if (mutation.type === 'attributes' && 
-                    mutation.target.tagName === 'AUDIO' && 
+                    (mutation.target.tagName === 'AUDIO' || mutation.target.tagName === 'VIDEO') && 
                     mutation.attributeName === 'src') {
                     shouldCheckAudio = true;
                 }
                 
-                // Check for new audio elements being added
+                // Check for new audio/video elements being added
                 mutation.addedNodes.forEach((node) => {
                     if (node.nodeType === Node.ELEMENT_NODE) {
-                        if (node.tagName === 'AUDIO' || 
-                            (node.querySelectorAll && node.querySelectorAll('audio').length > 0)) {
+                        if (node.tagName === 'AUDIO' || node.tagName === 'VIDEO' ||
+                            (node.querySelectorAll && (node.querySelectorAll('audio').length > 0 || node.querySelectorAll('video').length > 0))) {
                             shouldCheckAudio = true;
                         }
                     }
@@ -183,7 +183,7 @@ class SCORMAutoDownloader {
             });
             
             if (shouldCheckAudio) {
-                console.log('🔄 Audio content changed, checking for new files...');
+                console.log('🔄 Media content changed, checking for new files...');
                 setTimeout(() => {
                     this.downloadCurrentPageAudio();
                 }, 1000);
@@ -200,49 +200,84 @@ class SCORMAutoDownloader {
         this.observers.push(contentObserver);
     }
     
-    // Download audio from current page
+    // Download audio and video from current page
     async downloadCurrentPageAudio() {
         if (!this.isActive) return;
         
-        console.log(`\n🎵 Checking page ${this.pageCounter} for audio files...`);
+        console.log(`\n🎵🎬 Checking page ${this.pageCounter} for media files...`);
         
         const audioElements = document.querySelectorAll('audio');
-        const realUrls = [];
+        const videoElements = document.querySelectorAll('video');
+        const realMediaUrls = [];
         
         // Find real audio URLs
         audioElements.forEach((audio, index) => {
-            const src = audio.src;
+            const src = audio.src || audio.currentSrc;
             if (src && !src.startsWith('data:') && !this.downloadedUrls.has(src)) {
-                realUrls.push({
+                realMediaUrls.push({
                     url: src,
+                    type: 'audio',
                     element: audio,
-                    index: index + 1
+                    index: index + 1,
+                    icon: '🎵'
                 });
             }
         });
         
-        if (realUrls.length === 0) {
-            console.log(`⚠️ Page ${this.pageCounter}: No new real audio files found`);
+        // Find real video URLs
+        videoElements.forEach((video, index) => {
+            const src = video.src || video.currentSrc;
+            if (src && !src.startsWith('data:') && !this.downloadedUrls.has(src)) {
+                realMediaUrls.push({
+                    url: src,
+                    type: 'video',
+                    element: video,
+                    index: index + 1,
+                    icon: '🎬'
+                });
+            }
+            
+            // Also check source children for video
+            const sources = video.querySelectorAll('source');
+            sources.forEach((source, srcIndex) => {
+                const srcUrl = source.src;
+                if (srcUrl && !srcUrl.startsWith('data:') && !this.downloadedUrls.has(srcUrl)) {
+                    realMediaUrls.push({
+                        url: srcUrl,
+                        type: 'video',
+                        element: video,
+                        index: `${index + 1}-src${srcIndex + 1}`,
+                        icon: '🎬'
+                    });
+                }
+            });
+        });
+        
+        if (realMediaUrls.length === 0) {
+            console.log(`⚠️ Page ${this.pageCounter}: No new media files found`);
             this.pageCounter++;
             return;
         }
         
-        console.log(`✅ Page ${this.pageCounter}: Found ${realUrls.length} new audio files to download`);
+        console.log(`✅ Page ${this.pageCounter}: Found ${realMediaUrls.length} new media files`);
+        realMediaUrls.forEach(media => {
+            console.log(`   ${media.icon} ${media.type.toUpperCase()}: ${media.url.split('/').pop()}`);
+        });
         
         // Download each file
-        for (let i = 0; i < realUrls.length; i++) {
-            const audioData = realUrls[i];
+        for (let i = 0; i < realMediaUrls.length; i++) {
+            const mediaData = realMediaUrls[i];
             
             try {
                 // Mark as downloaded to prevent duplicates
-                this.downloadedUrls.add(audioData.url);
+                this.downloadedUrls.add(mediaData.url);
                 
-                console.log(`⬇️ Downloading ${i + 1}/${realUrls.length}: ${audioData.url.split('/').pop()}`);
+                console.log(`⬇️ ${mediaData.icon} Downloading ${i + 1}/${realMediaUrls.length}: ${mediaData.url.split('/').pop()}`);
                 
                 // Convert to absolute URL if needed
-                const absoluteUrl = audioData.url.startsWith('http') ? 
-                    audioData.url : 
-                    new URL(audioData.url, window.location.href).href;
+                const absoluteUrl = mediaData.url.startsWith('http') ? 
+                    mediaData.url : 
+                    new URL(mediaData.url, window.location.href).href;
                 
                 const response = await fetch(absoluteUrl, {
                     method: 'GET',
@@ -260,18 +295,18 @@ class SCORMAutoDownloader {
                     throw new Error('Empty file');
                 }
                 
-                // Create filename with page number
-                const originalName = audioData.url.split('/').pop();
+                // Create filename with page number and media type
+                const originalName = mediaData.url.split('/').pop();
                 const cleanName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
-                const filename = `${this.prefix}__page${String(this.pageCounter).padStart(2, '0')}_${cleanName}`;
+                const filename = `${this.prefix}__page${String(this.pageCounter).padStart(2, '0')}_${mediaData.type}_${cleanName}`;
                 
                 this.downloadBlob(blob, filename);
                 this.totalDownloaded++;
                 
-                console.log(`✅ Downloaded: ${filename} (${(blob.size / 1024).toFixed(1)} KB)`);
+                console.log(`✅ ${mediaData.icon} Downloaded: ${filename} (${(blob.size / 1024 / 1024).toFixed(1)} MB)`);
                 
             } catch (error) {
-                console.error(`❌ Failed to download ${audioData.url}:`, error);
+                console.error(`❌ Failed to download ${mediaData.url}:`, error);
             }
             
             // Small delay between downloads
@@ -279,7 +314,7 @@ class SCORMAutoDownloader {
         }
         
         this.pageCounter++;
-        console.log(`📊 Page ${this.pageCounter - 1} complete. Total downloaded so far: ${this.totalDownloaded}`);
+        console.log(`📊 Page ${this.pageCounter - 1} complete. Total media downloaded: ${this.totalDownloaded}`);
     }
     
     // Download a blob
@@ -366,9 +401,9 @@ function getDownloadStatus() {
     }
 }
 
-// Function to manually download current page (for testing)
+// Function to manually download current page media (for testing)
 async function downloadCurrentPage() {
-    console.log('🧪 Testing current page download...');
+    console.log('🧪 Testing current page media download...');
     
     const tempDownloader = new SCORMAutoDownloader();
     await tempDownloader.downloadCurrentPageAudio();
@@ -376,7 +411,7 @@ async function downloadCurrentPage() {
     console.log('✅ Current page test complete');
 }
 
-console.log('🤖 Auto Navigation Audio Downloader loaded!');
+console.log('🤖 Auto Navigation Media Downloader loaded!');
 console.log('');
 console.log('🚀 Available functions:');
 console.log('- startAutoDownload() - Begin auto-downloading (do this first!)');
@@ -387,8 +422,8 @@ console.log('');
 console.log('💡 INSTRUCTIONS:');
 console.log('1. Run startAutoDownload()');
 console.log('2. Navigate through your SCORM course normally (click Next, etc.)');
-console.log('3. Audio files will download automatically from each page');
+console.log('3. Audio AND video files will download automatically from each page');
 console.log('4. Run stopAutoDownload() when finished');
 console.log('');
 console.log('🎯 This monitors for Next clicks, URL changes, and content updates!');
-console.log('📁 Files will be named with page numbers showing discovery order');
+console.log('📁 Files will be named: page##_audio_filename.mp3 or page##_video_filename.mp4');
